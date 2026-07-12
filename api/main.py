@@ -1,0 +1,220 @@
+import os, sys, time, uuid, json
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from agent.core import MinorAdvisorAgent
+from agent.data_loader import load_minors
+
+def _get_api_key() -> str:
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if key and key.startswith("sk-"):
+        return key
+    config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".config")
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as f:
+            key = f.read().strip()
+    if not key or not key.startswith("sk-"):
+        raise RuntimeError("请通过环境变量 DEEPSEEK_API_KEY 或 .config 文件设置有效的 DeepSeek API Key")
+    return key
+
+API_KEY = _get_api_key()
+
+_agent = MinorAdvisorAgent(api_key=API_KEY)
+_minors = load_minors()
+
+app = FastAPI(
+    title="Tsinghua Minor Advisor API (OpenAI-compatible)",
+    description="清华大学辅修专业规划助手 — 兼容 OpenAI /v1/chat/completions 格式",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# === OpenAI-compatible Schemas ===
+
+class ChatCompletionMessage(BaseModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str = Field(default="tsinghua-minor-advisor", description="模型名，本服务固定为此值")
+    messages: list[ChatCompletionMessage] = Field(description="对话消息列表")
+    temperature: float = Field(default=0.3, ge=0, le=2)
+    max_tokens: int = Field(default=4096, ge=1, le=8192)
+    stream: bool = Field(default=False, description="是否流式返回（SSE 格式）")
+    user: Optional[str] = Field(default=None, description="会话标识，用于保持上下文")
+
+class Choice(BaseModel):
+    index: int
+    message: ChatCompletionMessage
+    finish_reason: str
+
+class Usage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+class ChatCompletionResponse(BaseModel):
+    id: str
+    object: str = "chat.completion"
+    created: int
+    model: str
+    choices: list[Choice]
+    usage: Usage
+
+
+# === Session Management ===
+
+_sessions: dict[str, object] = {}
+
+def _get_or_create_session(user_id: Optional[str] = None) -> tuple[str, object]:
+    if user_id and user_id in _sessions:
+        return user_id, _sessions[user_id]
+    sid = user_id or str(uuid.uuid4())
+    session = _agent.create_session()
+    _sessions[sid] = session
+    return sid, session
+
+
+# === OpenAI /v1/chat/completions ===
+
+def _convert_openai_to_agent(messages: list[ChatCompletionMessage]) -> str:
+    """将 OpenAI 消息列表转为一条用户消息（取最后一条 user 消息）。"""
+    for msg in reversed(messages):
+        if msg.role == "user":
+            return msg.content
+    return ""
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(request: ChatCompletionRequest):
+    sid, session = _get_or_create_session(request.user)
+    user_content = _convert_openai_to_agent(request.messages)
+
+    if not user_content:
+        raise HTTPException(status_code=400, detail="消息中缺少 user 角色消息")
+
+    try:
+        reply = session.process_message(user_content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    if request.stream:
+        return StreamingResponse(
+            _stream_response(chat_id, created, request.model, reply),
+            media_type="text/event-stream"
+        )
+
+    return ChatCompletionResponse(
+        id=chat_id,
+        created=created,
+        model=request.model,
+        choices=[
+            Choice(
+                index=0,
+                message=ChatCompletionMessage(role="assistant", content=reply),
+                finish_reason="stop"
+            )
+        ],
+        usage=Usage(total_tokens=0)
+    )
+
+
+def _stream_response(chat_id: str, created: int, model: str, content: str):
+    """Generate SSE chunks for OpenAI-compatible streaming."""
+    # First chunk: role announcement
+    yield _sse_chunk(chat_id, created, model, {"role": "assistant", "content": ""}, None)
+    # Content chunks
+    for char in content:
+        yield _sse_chunk(chat_id, created, model, {"content": char}, None)
+    # Final chunk
+    yield _sse_chunk(chat_id, created, model, {}, "stop")
+    yield "data: [DONE]\n\n"
+
+
+def _sse_chunk(chat_id: str, created: int, model: str,
+               delta: dict, finish_reason: Optional[str]) -> str:
+    chunk = {
+        "id": chat_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}]
+    }
+    return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+
+# === Helper endpoints ===
+
+@app.get("/v1/models")
+def list_models():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "tsinghua-minor-advisor",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "tsinghua"
+            }
+        ]
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "service": "Tsinghua Minor Advisor",
+        "api_style": "OpenAI-compatible",
+        "endpoints": {
+            "chat": "POST /v1/chat/completions",
+            "models": "GET /v1/models",
+            "minors_list": "GET /minors",
+            "minors_detail": "GET /minors/{name}"
+        }
+    }
+
+
+@app.get("/minors")
+def list_minors():
+    items = []
+    for m in _minors:
+        items.append({
+            "name": m.name,
+            "department": m.department,
+            "total_credits": m.total_credits,
+            "major_restrictions": m.major_restrictions,
+            "capacity": m.capacity,
+            "contact": m.contact
+        })
+    return {"minors": items}
+
+
+@app.get("/minors/{name}")
+def get_minor(name: str):
+    for m in _minors:
+        if name in m.name or m.name in name:
+            return {
+                "name": m.name,
+                "department": m.department,
+                "total_credits": m.total_credits,
+                "prerequisites": m.prerequisites,
+                "major_restrictions": m.major_restrictions,
+                "capacity": m.capacity,
+                "contact": m.contact
+            }
+    raise HTTPException(status_code=404, detail=f"未找到辅修专业: {name}")

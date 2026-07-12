@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  tsinghua-minor-advisor:
+    build: .
+    container_name: tsinghua-minor-advisor
+    ports:
+      - "8000:8000"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LANG=C.UTF-8
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
