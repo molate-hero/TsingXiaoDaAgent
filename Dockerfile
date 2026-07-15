@@ -19,11 +19,19 @@ COPY 本科辅修培养方案2026版.md .
 # 创建数据缓存目录，设为全局可写以便兼容宿主机 volume 挂载
 RUN mkdir -p /app/data && chmod 777 /app/data
 
+# 预下载词嵌入模型（构建时下载到共享缓存，避免运行时等待）
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV SENTENCE_TRANSFORMERS_HOME=/app/model_cache
+RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache \
+    && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('shibing624/text2vec-base-chinese')"
+
 USER appuser
 
 EXPOSE 8000
 
 ENV PYTHONUNBUFFERED=1
 ENV LANG=C.UTF-8
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV SENTENCE_TRANSFORMERS_HOME=/app/model_cache
 
 CMD ["python", "run.py", "--mode", "api", "--host", "0.0.0.0", "--port", "8000"]

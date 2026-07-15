@@ -63,6 +63,26 @@ class Tools:
             f"注意：辅修学位要求与主修专业归属不同专业类，请确认二者的专业类关系。"
         )
 
+    def semantic_search(self, query: str) -> str:
+        """【语义搜索】使用词嵌入（Word Embedding）进行语义相似度搜索，理解查询意图而非仅匹配关键词。"""
+        try:
+            from .embedding import semantic_search as _semantic_search
+            from .data_loader import load_minors
+            minors = load_minors()
+            results = _semantic_search(query, minors, top_k=5)
+            if not results:
+                return f"语义搜索未找到与 '{query}' 相关的辅修专业。"
+            lines = [f"词嵌入语义搜索 '{query}' 的结果（按相关度排序）："]
+            for m, score in results:
+                lines.append(f"\n【{m.name}】({m.department}) [相似度: {score:.3f}]")
+                lines.append(f"  学分：{m.total_credits or '见方案'}")
+                lines.append(f"  限制：{m.major_restrictions[:100] or '无'}")
+            return "\n".join(lines)
+        except ImportError:
+            return "语义搜索不可用：请安装 sentence-transformers 以启用词嵌入功能。"
+        except Exception as e:
+            return f"语义搜索出错: {e}"
+
     def multi_agent_search(self, major: str, interests: str, grade: str = "") -> str:
         """【Multi-Agent 协同搜索】使用多个专业子 Agent 协同分析学生需求，推荐最适配的辅修专业。"""
         try:
@@ -101,6 +121,13 @@ class Tools:
                 "parameters": {
                     "major": {"type": "string", "description": "学生的主修专业"},
                     "minor_name": {"type": "string", "description": "辅修专业名称"}
+                }
+            },
+            {
+                "name": "semantic_search",
+                "description": "【词嵌入语义搜索】用 AI 理解查询意图进行语义搜索（如搜索'计算机'也能找到'软件工程'、'人工智能'等）",
+                "parameters": {
+                    "query": {"type": "string", "description": "搜索查询"}
                 }
             },
             {

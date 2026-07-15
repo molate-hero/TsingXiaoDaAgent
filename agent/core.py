@@ -182,7 +182,8 @@ class AgentSession:
             "get_minor_detail": lambda: self.tools.get_minor_detail(params.get("name", "")),
             "check_eligibility": lambda: self.tools.check_eligibility(
                 params.get("major", ""), params.get("minor_name", "")
-            )
+            ),
+            "semantic_search": lambda: self.tools.semantic_search(params.get("query", "")),
         }
         func = tool_map.get(tool_name)
         if func:
