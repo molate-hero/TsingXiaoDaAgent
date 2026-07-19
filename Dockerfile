@@ -4,7 +4,8 @@ WORKDIR /app
 
 # 安装依赖（利用 Docker 层缓存）
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+
 
 # 创建非 root 用户
 RUN addgroup --system --gid 1001 appuser \
