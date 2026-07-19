@@ -1,8 +1,8 @@
 import json, re
-import httpx
 from .memory import ShortTermMemory, LongTermMemory
 from .tools import Tools
 from .course_graph import parse_courses_from_table, topological_sort, format_plan, build_prerequisite_graph
+from .llm_client import chat_completion
 
 
 class SpecialistAgent:
@@ -24,20 +24,10 @@ class SpecialistAgent:
 
     def _call_llm(self, temperature: float = 0.3) -> str:
         messages = [{"role": m.role, "content": m.content} for m in self.memory.get_all()]
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "deepseek-chat",
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": 2048
-        }
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(f"{self.base_url}/chat/completions", headers=headers, json=payload)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+        return chat_completion(
+            self.api_key, self.base_url, messages,
+            temperature=temperature, max_tokens=2048, timeout=60, retries=1,
+        )
 
 
 # === Specialized Agent Definitions ===

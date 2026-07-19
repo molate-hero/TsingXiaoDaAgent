@@ -15,6 +15,7 @@ COPY agent/ agent/
 COPY api/ api/
 COPY run.py .
 COPY 本科辅修培养方案2026版.md .
+COPY curated_courses.json .
 
 # 创建数据缓存目录，设为全局可写以便兼容宿主机 volume 挂载
 RUN mkdir -p /app/data && chmod 777 /app/data

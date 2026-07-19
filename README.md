@@ -102,7 +102,9 @@ TsingXiaoDaAgent/
 │   ├── data_loader.py      # 长期记忆：解析辅养方案 → 结构化数据
 │   ├── embedding.py        # 词嵌入引擎：语义搜索（sentence-transformers）
 │   ├── memory.py           # 短期记忆（对话历史）& 长期记忆（辅修数据库）
-│   ├── tools.py            # 工具集：搜索、详情、资格检查、语义搜索
+│   ├── tools.py            # 工具集：搜索、详情、资格检查
+│   ├── course_catalog.py   # 已整理课程资料的本地检索目录
+│   ├── llm_client.py       # 统一的模型调用、超时与瞬时失败重试
 │   ├── prompts.py          # 系统提示词模板
 │   └── planner.py          # 修读计划生成
 ├── api/
@@ -110,6 +112,7 @@ TsingXiaoDaAgent/
 ├── data/                   # 解析缓存（自动生成）
 ├── Dockerfile & docker-compose.yml
 ├── run.py                  # 统一入口
+├── curated_courses.json    #课程介绍
 └── 本科辅修培养方案2025版.md
 ```
 
@@ -119,10 +122,11 @@ TsingXiaoDaAgent/
 |------|------|
 | **推理机制** | ReAct 模式：LLM 输出 `ACTION` 触发工具调用，结果回填后二次推理 |
 | **短期记忆** | 每个会话独立的对话历史（最近 20 轮），以 `user` 字段区分 |
+| **长期记忆** | 44 个辅修专业培养方案，以及 1000+ 门已整理的课程资料 |
 | **长期记忆** | 44 个辅修专业的结构化数据（学分、课程、限制、联系方式等） |
 | **词嵌入** | 基于 `shibing624/text2vec-base-chinese` 的语义搜索，余弦相似度排序 |
 | **规划能力** | LLM 自主推理 + 专用 Planner 双通道，考虑先修关系、开课学期、学分均衡 |
-| **工具集** | `list_minors` / `search_minors` / `semantic_search` / `get_minor_detail` / `check_eligibility` / `multi_agent_search` |
+| **工具集** | 	list_minors / search_minors / semantic_search / get_minor_detail / check_eligibility / multi_agent_search / search_courses /get_course_detail / list_minor_courses
 
 ---
 
