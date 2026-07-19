@@ -122,6 +122,13 @@ def chat_completions(request: ChatCompletionRequest):
         with _sessions_lock:
             _, session, session_lock = _get_or_create_session(request.user)
         with session_lock:
+            # 如果 session 是新建的（仅含 system prompt），
+            # 将请求中的历史消息填入短期记忆，确保上下文不丢失。
+            # 这兼容 Page Assist 等不传 user 字段的客户端。
+            if len(session.stm.messages) <= 1 and len(request.messages) > 1:
+                for msg in request.messages[:-1]:
+                    if msg.role in ("user", "assistant"):
+                        session.stm.add(msg.role, msg.content)
             reply = session.process_message(user_content, temperature=request.temperature)
     except Exception:
         logger.exception("Chat completion failed")
