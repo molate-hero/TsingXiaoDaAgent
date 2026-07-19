@@ -112,6 +112,7 @@ TsingXiaoDaAgent/
 ├── data/                   # 解析缓存（自动生成）
 ├── Dockerfile & docker-compose.yml
 ├── run.py                  # 统一入口
+├── curated_courses.json    #课程介绍
 └── 本科辅修培养方案2025版.md
 ```
 
@@ -125,17 +126,7 @@ TsingXiaoDaAgent/
 | **长期记忆** | 44 个辅修专业的结构化数据（学分、课程、限制、联系方式等） |
 | **词嵌入** | 基于 `shibing624/text2vec-base-chinese` 的语义搜索，余弦相似度排序 |
 | **规划能力** | LLM 自主推理 + 专用 Planner 双通道，考虑先修关系、开课学期、学分均衡 |
-| **工具集** | 辅修搜索、资格检查、课程搜索、课程详情和课程列表 |
-
-### 课程资料检索
-
-`data/curated_courses.json` 中保存了已匹配到辅修培养方案的课程资料。Agent 会在涉及具体课程的提问中优先查询这些本地资料，能够回答课程内容、学分、先修要求、考核方式、成绩构成和教材等问题。
-
-内部工具包括：
-
-- `search_courses`：按课程号、课程名称、院系或课程主题搜索。
-- `get_course_detail`：查询单门课程的详细资料。
-- `list_minor_courses`：列出某辅修培养方案中已收录详情的课程。
+| **工具集** | 	list_minors / search_minors / semantic_search / get_minor_detail / check_eligibility / multi_agent_search / search_courses /get_course_detail / list_minor_courses
 
 ---
 
