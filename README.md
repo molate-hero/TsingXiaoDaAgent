@@ -100,6 +100,7 @@ TsingXiaoDaAgent/
 ├── agent/                  # Agent 核心
 │   ├── core.py             # 会话管理、LLM 调用、ReAct 工具调度
 │   ├── data_loader.py      # 长期记忆：解析辅养方案 → 结构化数据
+│   ├── embedding.py        # 词嵌入引擎：语义搜索（sentence-transformers）
 │   ├── memory.py           # 短期记忆（对话历史）& 长期记忆（辅修数据库）
 │   ├── tools.py            # 工具集：搜索、详情、资格检查
 │   ├── course_catalog.py   # 已整理课程资料的本地检索目录
@@ -121,6 +122,8 @@ TsingXiaoDaAgent/
 | **推理机制** | ReAct 模式：LLM 输出 `ACTION` 触发工具调用，结果回填后二次推理 |
 | **短期记忆** | 每个会话独立的对话历史（最近 20 轮），以 `user` 字段区分 |
 | **长期记忆** | 44 个辅修专业培养方案，以及 1000+ 门已整理的课程资料 |
+| **长期记忆** | 44 个辅修专业的结构化数据（学分、课程、限制、联系方式等） |
+| **词嵌入** | 基于 `shibing624/text2vec-base-chinese` 的语义搜索，余弦相似度排序 |
 | **规划能力** | LLM 自主推理 + 专用 Planner 双通道，考虑先修关系、开课学期、学分均衡 |
 | **工具集** | 辅修搜索、资格检查、课程搜索、课程详情和课程列表 |
 
@@ -169,11 +172,13 @@ curl http://localhost:8000/v1/chat/completions \
 
 ## 配环境
 
-依赖：`fastapi`、`uvicorn`、`httpx`、`pydantic`
+依赖：`fastapi`、`uvicorn`、`httpx`、`pydantic`、`sentence-transformers`
 
 ```bash
-pip install fastapi uvicorn httpx pydantic
+pip install fastapi uvicorn httpx pydantic sentence-transformers
 ```
+
+> 首次运行词嵌入功能时会自动下载模型（约 400MB），国内已配置 HF 镜像加速。也可通过环境变量 `HF_ENDPOINT` 自定义镜像源。
 
 ---
 
