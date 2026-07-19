@@ -1,4 +1,6 @@
-import os, sys, time, uuid, json
+import os, sys, time, uuid, json, logging
+from collections import OrderedDict
+from threading import Lock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, HTTPException
@@ -8,6 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal
 from agent.core import MinorAdvisorAgent
 from agent.data_loader import load_minors
+from agent.core import AgentSession
 
 def _get_api_key() -> str:
     key = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -25,6 +28,7 @@ API_KEY = _get_api_key()
 
 _agent = MinorAdvisorAgent(api_key=API_KEY)
 _minors = load_minors()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Tsinghua Minor Advisor API (OpenAI-compatible)",
@@ -35,7 +39,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,15 +49,15 @@ app.add_middleware(
 
 class ChatCompletionMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
-    content: str
+    content: str = Field(min_length=1, max_length=12_000)
 
 class ChatCompletionRequest(BaseModel):
     model: str = Field(default="tsinghua-minor-advisor", description="模型名，本服务固定为此值")
-    messages: list[ChatCompletionMessage] = Field(description="对话消息列表")
+    messages: list[ChatCompletionMessage] = Field(min_length=1, max_length=50, description="对话消息列表")
     temperature: float = Field(default=0.3, ge=0, le=2)
     max_tokens: int = Field(default=4096, ge=1, le=8192)
     stream: bool = Field(default=False, description="是否流式返回（SSE 格式）")
-    user: Optional[str] = Field(default=None, description="会话标识，用于保持上下文")
+    user: Optional[str] = Field(default=None, max_length=128, description="会话标识，用于保持上下文")
 
 class Choice(BaseModel):
     index: int
@@ -76,15 +80,24 @@ class ChatCompletionResponse(BaseModel):
 
 # === Session Management ===
 
-_sessions: dict[str, object] = {}
+MAX_SESSIONS = 1_000
+_sessions: OrderedDict[str, AgentSession] = OrderedDict()
+_session_locks: dict[str, Lock] = {}
+_sessions_lock = Lock()
 
-def _get_or_create_session(user_id: Optional[str] = None) -> tuple[str, object]:
+def _get_or_create_session(user_id: Optional[str] = None) -> tuple[str, AgentSession, Lock]:
     if user_id and user_id in _sessions:
-        return user_id, _sessions[user_id]
+        _sessions.move_to_end(user_id)
+        return user_id, _sessions[user_id], _session_locks[user_id]
     sid = user_id or str(uuid.uuid4())
     session = _agent.create_session()
     _sessions[sid] = session
-    return sid, session
+    session_lock = Lock()
+    _session_locks[sid] = session_lock
+    if len(_sessions) > MAX_SESSIONS:
+        expired_sid, _ = _sessions.popitem(last=False)
+        _session_locks.pop(expired_sid, None)
+    return sid, session, session_lock
 
 
 # === OpenAI /v1/chat/completions ===
@@ -99,16 +112,20 @@ def _convert_openai_to_agent(messages: list[ChatCompletionMessage]) -> str:
 
 @app.post("/v1/chat/completions")
 def chat_completions(request: ChatCompletionRequest):
-    sid, session = _get_or_create_session(request.user)
     user_content = _convert_openai_to_agent(request.messages)
 
     if not user_content:
         raise HTTPException(status_code=400, detail="消息中缺少 user 角色消息")
 
     try:
-        reply = session.process_message(user_content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Sessions keep mutable conversation history, so serialize only requests for one session.
+        with _sessions_lock:
+            _, session, session_lock = _get_or_create_session(request.user)
+        with session_lock:
+            reply = session.process_message(user_content, temperature=request.temperature)
+    except Exception:
+        logger.exception("Chat completion failed")
+        raise HTTPException(status_code=502, detail="上游模型服务暂时不可用，请稍后重试")
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -139,8 +156,8 @@ def _stream_response(chat_id: str, created: int, model: str, content: str):
     # First chunk: role announcement
     yield _sse_chunk(chat_id, created, model, {"role": "assistant", "content": ""}, None)
     # Content chunks
-    for char in content:
-        yield _sse_chunk(chat_id, created, model, {"content": char}, None)
+    for start in range(0, len(content), 64):
+        yield _sse_chunk(chat_id, created, model, {"content": content[start:start + 64]}, None)
     # Final chunk
     yield _sse_chunk(chat_id, created, model, {}, "stop")
     yield "data: [DONE]\n\n"

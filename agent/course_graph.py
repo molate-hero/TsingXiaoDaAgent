@@ -39,7 +39,7 @@ def parse_courses_from_table(html_table: str) -> list[Course]:
         if len(cells) >= 4:
             course_id = cells[0]
             # Skip non-course rows (headers, merged cells)
-            if not re.match(r"^\d", course_id) and course_id != "新开课":
+            if not re.match(r"^\d", course_id) and course_id not in {"新开课", "新开"}:
                 continue
 
             name = cells[1] if len(cells) > 1 else ""
@@ -122,7 +122,7 @@ def topological_sort(courses: list[Course]) -> list[list[Course]]:
     taken = set()
     remaining = set(course_map.keys())
 
-    SEMESTER_CYCLE = ["秋", "春", "秋", "春", "秋", "春", "秋", "春"]
+    SEMESTER_CYCLE = ["秋", "春", "夏", "秋", "春", "夏", "秋", "春", "夏"]
     semester_idx = 0
 
     while remaining:
@@ -147,12 +147,13 @@ def topological_sort(courses: list[Course]) -> list[list[Course]]:
             # Check semester compatibility
             target_sem = SEMESTER_CYCLE[semester_idx % len(SEMESTER_CYCLE)]
             if course.semester:
-                if "秋" in course.semester and target_sem == "春":
-                    # Can't take this semester, defer
-                    if name not in next_queue:
-                        next_queue.append(name)
-                    continue
-                if "春" in course.semester and target_sem == "秋":
+                offered_in_fall = "秋" in course.semester
+                offered_in_spring = "春" in course.semester
+                offered_in_summer = "夏" in course.semester
+                if ((target_sem == "秋" and not offered_in_fall) or
+                        (target_sem == "春" and not offered_in_spring) or
+                        (target_sem == "夏" and not offered_in_summer)):
+                    # A course marked "春秋" is offered in both terms.
                     if name not in next_queue:
                         next_queue.append(name)
                     continue
@@ -200,7 +201,7 @@ def format_plan(plan: list[list[Course]], student_grade: str = "大二") -> str:
     """Format the plan as a human-readable table."""
     grade_map = {"大一": 1, "大二": 2, "大三": 3, "大四": 4}
     current_grade_num = grade_map.get(student_grade, 2)
-    semester_labels = ["秋", "春", "秋", "春", "秋", "春", "秋", "春"]
+    semester_labels = ["秋", "春", "夏", "秋", "春", "夏", "秋", "春", "夏"]
     year_labels = ["大二", "大二", "大三", "大三", "大四", "大四"]
 
     lines = ["📋 **拓扑排序算法生成的最优修读计划**\n"]
@@ -210,7 +211,7 @@ def format_plan(plan: list[list[Course]], student_grade: str = "大二") -> str:
     for i, semester_courses in enumerate(plan):
         if i >= len(semester_labels):
             break
-        year_idx = current_grade_num - 1 + (i // 2)
+        year_idx = current_grade_num - 1 + (i // 3)
         if year_idx >= 4:
             break
         year_label = f"{['大一','大二','大三','大四'][year_idx]}"
