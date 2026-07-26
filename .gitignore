@@ -1,1 +1,46 @@
-*.pyc
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# --- Project Specific ---
+# API Key（禁止提交密钥）
+.config
+
+# 数据缓存（运行时自动生成，无需追踪）
+data/minors.json
+data/embeddings.pkl
+data/embeddings_meta.json
+
+# 模型缓存（构建或运行时下载）
+model_cache/
+
+# HuggingFace 缓存
+.huggingface/
+.cache/huggingface/
+
+# --- Logs ---
+*.log
+
+# --- Docker ---
+.docker/
