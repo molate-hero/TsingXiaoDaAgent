@@ -1,6 +1,27 @@
-# Tsinghua Minor Advisor — 清华大学辅修专业规划助手
+<div align="center">
+  <img src="icon.svg" width="128" height="128" alt="Tsinghua Minor Advisor Icon">
+  <h1 align="center">Tsinghua Minor Advisor</h1>
+  <p align="center"><strong>清华大学辅修专业规划助手</strong></p>
+  <p align="center">基于 DeepSeek API + 词嵌入语义搜索的智能 Agent<br>
+  为清华本科生提供辅修专业咨询与修读规划服务</p>
+  <p align="center">
+    <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python">
+    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+    <img src="https://img.shields.io/badge/API-OpenAI%20Compatible-orange" alt="API">
+  </p>
+</div>
 
-基于 DeepSeek API 构建的智能 Agent，为清华本科生提供辅修专业咨询与修读规划服务。兼容 OpenAI `/v1/chat/completions` 格式，支持流式输出。
+---
+
+## 目录
+
+- [快速开始](#快速开始)
+- [项目架构](#项目架构)
+- [设计要点](#设计要点)
+- [使用示例](#使用示例)
+- [API 文档](#api-文档)
+- [配置说明](#配置说明)
+- [License](#license)
 
 ---
 
@@ -51,82 +72,44 @@ docker compose up -d
 
 ---
 
-## API 文档
-
-### OpenAI 兼容接口
-
-**对话：** `POST /v1/chat/completions`
-
-```json
-{
-  "model": "tsinghua-minor-advisor",
-  "messages": [
-    {"role": "user", "content": "我是计算机系大一学生，想辅修经济学"}
-  ],
-  "stream": true,
-  "user": "会话ID（可选）"
-}
-```
-
-可用任何 OpenAI SDK 调用：
-
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
-resp = client.chat.completions.create(
-    model="tsinghua-minor-advisor",
-    messages=[{"role": "user", "content": "..."}],
-    stream=True
-)
-for chunk in resp:
-    print(chunk.choices[0].delta.content or "", end="")
-```
-
-**模型列表：** `GET /v1/models`
-
-### 辅修数据接口
-
-| 端点 | 说明 |
-|------|------|
-| `GET /minors` | 获取所有辅修专业列表 |
-| `GET /minors/{名称}` | 获取某辅修详细信息 |
-
----
-
 ## 项目架构
 
 ```
 TsingXiaoDaAgent/
-├── agent/                  # Agent 核心
-│   ├── core.py             # 会话管理、LLM 调用、ReAct 工具调度
-│   ├── data_loader.py      # 长期记忆：解析辅养方案 → 结构化数据
-│   ├── embedding.py        # 词嵌入引擎：语义搜索（sentence-transformers）
-│   ├── memory.py           # 短期记忆（对话历史）& 长期记忆（辅修数据库）
-│   ├── tools.py            # 工具集：搜索、详情、资格检查
-│   ├── course_catalog.py   # 已整理课程资料的本地检索目录
-│   ├── llm_client.py       # 统一的模型调用、超时与瞬时失败重试
-│   ├── prompts.py          # 系统提示词模板
-│   └── planner.py          # 修读计划生成
+├── agent/                      # Agent 核心
+│   ├── core.py                 # 会话管理、LLM 调用、ReAct 工具调度
+│   ├── data_loader.py          # 长期记忆：解析辅养方案 → 结构化数据
+│   ├── embedding.py            # 词嵌入引擎：语义搜索（sentence-transformers）
+│   ├── course_catalog.py       # 已整理课程资料的本地检索目录
+│   ├── llm_client.py           # 统一的模型调用、超时与瞬时失败重试
+│   ├── memory.py               # 短期记忆（对话历史）& 长期记忆（数据库）
+│   ├── tools.py                # 工具集：搜索、详情、资格检查
+│   ├── prompts.py              # 系统提示词模板
+│   └── planner.py              # 修读计划生成
 ├── api/
-│   └── main.py             # FastAPI 服务（OpenAI 兼容格式）
-├── data/                   # 解析缓存（自动生成）
+│   └── main.py                 # FastAPI 服务（OpenAI 兼容格式）
+├── data/                       # 解析缓存（自动生成）
 ├── Dockerfile & docker-compose.yml
-├── run.py                  # 统一入口
-├── curated_courses.json    #课程介绍
-└── 本科辅修培养方案2025版.md
+├── run.py                      # 统一入口
+├── icon.svg                    # 项目图标
+├── curated_courses.json        # 课程介绍
+├── requirements.txt            # 依赖列表
+└── 本科辅修培养方案2025版.md     # 原始培养方案数据
 ```
 
-### 设计要点
+---
+
+## 设计要点
 
 | 组件 | 说明 |
 |------|------|
 | **推理机制** | ReAct 模式：LLM 输出 `ACTION` 触发工具调用，结果回填后二次推理 |
 | **短期记忆** | 每个会话独立的对话历史（最近 20 轮），以 `user` 字段区分 |
-| **长期记忆** | 44 个辅修专业培养方案，以及 1000+ 门已整理的课程资料 |
-| **长期记忆** | 44 个辅修专业的结构化数据（学分、课程、限制、联系方式等） |
+| **长期记忆** | 44 个辅修专业培养方案 + 1000+ 门已整理的课程资料 |
 | **词嵌入** | 基于 `shibing624/text2vec-base-chinese` 的语义搜索，余弦相似度排序 |
 | **规划能力** | LLM 自主推理 + 专用 Planner 双通道，考虑先修关系、开课学期、学分均衡 |
-| **工具集** | 	list_minors / search_minors / semantic_search / get_minor_detail / check_eligibility / multi_agent_search / search_courses /get_course_detail / list_minor_courses
+| **工具集** | `list_minors` · `search_minors` · `semantic_search` · `get_minor_detail` · `check_eligibility` · `multi_agent_search` · `search_courses` · `get_course_detail` · `list_minor_courses` |
+| **API 格式** | 兼容 OpenAI `/v1/chat/completions`，支持流式 SSE |
 
 ---
 
@@ -161,15 +144,64 @@ curl http://localhost:8000/v1/chat/completions \
 
 ---
 
-## 配环境
+## API 文档
 
-依赖：`fastapi`、`uvicorn`、`httpx`、`pydantic`、`sentence-transformers`
+### OpenAI 兼容接口
+
+**对话：** `POST /v1/chat/completions`
+
+```json
+{
+  "model": "tsinghua-minor-advisor",
+  "messages": [
+    {"role": "user", "content": "我是计算机系大一学生，想辅修经济学"}
+  ],
+  "stream": true,
+  "user": "会话ID（可选）"
+}
+```
+
+可用任何 OpenAI SDK 调用：
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+resp = client.chat.completions.create(
+    model="tsinghua-minor-advisor",
+    messages=[{"role": "user", "content": "..."}],
+    stream=True
+)
+for chunk in resp:
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/v1/chat/completions` | POST | 对话（支持流式） |
+| `/v1/models` | GET | 模型列表 |
+| `/minors` | GET | 所有辅修专业列表 |
+| `/minors/{name}` | GET | 某辅修详细信息 |
+| `/` | GET | 服务健康检查 |
+
+---
+
+## 配置说明
+
+### 依赖
 
 ```bash
 pip install fastapi uvicorn httpx pydantic sentence-transformers
 ```
 
-> 首次运行词嵌入功能时会自动下载模型（约 400MB），国内已配置 HF 镜像加速。也可通过环境变量 `HF_ENDPOINT` 自定义镜像源。
+### 词嵌入模型
+
+首次运行 `semantic_search` 时自动下载 `shibing624/text2vec-base-chinese`（约 400MB）。
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `HF_ENDPOINT` | `https://hf-mirror.com` | HuggingFace 镜像源（国内加速） |
+| `DEEPSEEK_API_KEY` | — | DeepSeek API Key |
+| `SENTENCE_TRANSFORMERS_HOME` | `~/.cache` | 模型缓存目录 |
 
 ---
 
