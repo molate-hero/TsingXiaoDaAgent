@@ -3,7 +3,7 @@ from .memory import ShortTermMemory, LongTermMemory
 from .tools import Tools
 from .course_graph import parse_courses_from_table, topological_sort, format_plan, build_prerequisite_graph
 from .llm_client import chat_completion
-
+import httpx
 
 class SpecialistAgent:
     """Base class for specialist sub-agents."""
