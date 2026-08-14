@@ -10,11 +10,28 @@ class Tools:
         self.ltm = long_term_memory
         self._api_key = api_key
         self.course_catalog = course_catalog or CourseCatalog.load()
+        self._multi_agent_system = None
 
-    def list_minors(self) -> str:
-        """列出所有可用的辅修专业。"""
+    def list_minors(self, group_by_department: bool = True) -> str:
+        """列出所有可用的辅修专业（按院系分组）。"""
         names = self.ltm.list_all()
-        return "清华大学2026年开放辅修专业列表：\n" + "\n".join(f"  {i+1}. {n}" for i, n in enumerate(names))
+        if not group_by_department:
+            return "清华大学2026年开放辅修专业列表：\n" + "\n".join(f"  {i+1}. {n}" for i, n in enumerate(names))
+
+        # Group by department for compact, scannable output.
+        from collections import defaultdict
+        grouped: dict[str, list[str]] = defaultdict(list)
+        for m in self.ltm.minors:
+            dept = m.department or "其他院系"
+            grouped[dept].append(m.name)
+
+        lines = ["清华大学2026年开放辅修专业列表（按院系分组）："]
+        for dept, minors in sorted(grouped.items()):
+            lines.append(f"\n【{dept}】")
+            for name in minors:
+                lines.append(f"  - {name}")
+        lines.append(f"\n共 {len(names)} 个辅修专业。")
+        return "\n".join(lines)
 
     def search_minors(self, keyword: str) -> str:
         """搜索辅修专业。"""
@@ -172,7 +189,10 @@ class Tools:
         """【Multi-Agent 协同搜索】使用多个专业子 Agent 协同分析学生需求，推荐最适配的辅修专业。"""
         try:
             from .multi_agent import MultiAgentSystem
-            mas = MultiAgentSystem(api_key=self._api_key)
+            # Cache the system so sub-agents are reused across calls.
+            if self._multi_agent_system is None:
+                self._multi_agent_system = MultiAgentSystem(api_key=self._api_key)
+            mas = self._multi_agent_system
             profile = {"major": major, "grade": grade, "interests": interests}
             return mas.search_recommendations(profile, self.ltm)
         except Exception as e:

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#6E2C8C"/>
+  
+  <!-- Robot/Agent (left half) -->
+  <!-- Head -->
+  <rect x="60" y="100" width="170" height="150" rx="30" fill="white" opacity="0.95"/>
+  <!-- Eyes -->
+  <circle cx="125" cy="165" r="18" fill="#6E2C8C"/>
+  <circle cx="165" cy="165" r="18" fill="#6E2C8C"/>
+  <!-- Eye glow -->
+  <circle cx="125" cy="165" r="8" fill="#9B59B6" opacity="0.6"/>
+  <circle cx="165" cy="165" r="8" fill="#9B59B6" opacity="0.6"/>
+  <!-- Mouth -->
+  <rect x="115" y="210" width="60" height="10" rx="5" fill="#6E2C8C" opacity="0.7"/>
+  <!-- Antenna -->
+  <rect x="135" y="75" width="20" height="25" rx="10" fill="white"/>
+  <circle cx="145" cy="68" r="15" fill="#FFD700"/>
+  <!-- Body -->
+  <rect x="70" y="265" width="150" height="160" rx="20" fill="white" opacity="0.85"/>
+  <!-- Body detail -->
+  <rect x="95" y="290" width="100" height="10" rx="5" fill="#6E2C8C" opacity="0.3"/>
+  <rect x="95" y="315" width="100" height="10" rx="5" fill="#6E2C8C" opacity="0.3"/>
+  <rect x="95" y="340" width="100" height="10" rx="5" fill="#6E2C8C" opacity="0.3"/>
+  
+  <!-- Graduation Cap & Book (right half) -->
+  <!-- Graduation cap -->
+  <path d="M280 150 L380 110 L480 150 L380 190 Z" fill="white" opacity="0.95"/>
+  <path d="M280 150 L280 170 Q380 210 480 170 L480 150" fill="white" opacity="0.8"/>
+  <!-- Cap tassel -->
+  <line x1="380" y1="110" x2="380" y2="65" stroke="#FFD700" stroke-width="3"/>
+  <circle cx="380" cy="60" r="6" fill="#FFD700"/>
+  <!-- Open book -->
+  <path d="M290 280 Q340 260 380 280 L380 430 Q340 410 290 430 Z" fill="white" opacity="0.9"/>
+  <path d="M380 280 Q420 260 470 280 L470 430 Q420 410 380 430 Z" fill="white" opacity="0.85"/>
+  <!-- Book spine -->
+  <line x1="380" y1="280" x2="380" y2="430" stroke="#6E2C8C" stroke-width="2" opacity="0.5"/>
+  <!-- Book lines left -->
+  <line x1="310" y1="310" x2="360" y2="310" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+  <line x1="310" y1="335" x2="360" y2="335" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+  <line x1="310" y1="360" x2="360" y2="360" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+  <!-- Book lines right -->
+  <line x1="400" y1="310" x2="450" y2="310" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+  <line x1="400" y1="335" x2="450" y2="335" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+  <line x1="400" y1="360" x2="450" y2="360" stroke="#6E2C8C" stroke-width="2" opacity="0.3"/>
+
+  <!-- Divider line -->
+  <line x1="256" y1="80" x2="256" y2="460" stroke="white" stroke-width="2" opacity="0.2"/>
+</svg>
