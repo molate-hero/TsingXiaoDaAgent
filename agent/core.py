@@ -1,14 +1,23 @@
 import json, re
 from collections.abc import Generator
 
-import httpx
-
 from .llm_client import chat_completion, chat_completion_stream
 from .memory import ShortTermMemory, LongTermMemory
 from .tools import Tools
 from .planner import CoursePlanner
 from .prompts import SYSTEM_PROMPT
 from .data_loader import load_minors
+
+# ── tool-call loop limits ──────────────────────────────────────────────
+# At most MAX_TOOL_CALLS tool executions per user turn.  When the limit is
+# reached, the LLM gets ONE extra turn to answer from the accumulated tool
+# results; only if it still insists on calling tools do we fail hard.
+MAX_TOOL_CALLS = 3
+TOOL_LIMIT_NUDGE = (
+    "已达到工具调用次数上限，请停止调用工具，"
+    "基于上面已有的工具结果直接回答用户的问题。"
+)
+TOOL_LIMIT_HARD_MESSAGE = "抱歉，查询所需的工具调用次数过多。请缩小问题范围后重试。"
 
 
 class MinorAdvisorAgent:
@@ -127,7 +136,10 @@ class AgentSession:
         block = "\n\n你可以在回答前使用以下工具获取信息。如果需要使用工具，输出格式为：\n"
         block += "THOUGHT: <你的思考过程>\n"
         block += "ACTION: <工具名称>\n"
-        block += "PARAMS: {\"参数名\": \"参数值\"}\n\n"
+        block += "PARAMS: {\"参数名\": \"参数值\"}\n"
+        block += "调用规则：每次回复最多输出一个工具调用（一个 ACTION）；"
+        block += "每轮对话最多调用 3 次工具，请优先调用最关键的工具；"
+        block += "简单寒暄、常识性问题或已有信息足够回答时不要调用工具。\n\n"
         block += "工具列表：\n"
         for t in tool_descriptions:
             block += f"- {t['name']}: {t['description']}\n"
@@ -158,11 +170,17 @@ class AgentSession:
             temperature=temperature, max_tokens=4096, timeout=90, retries=1,
         )
 
-        # Tool-use loop (max 3 hops).
+        # Tool-use loop (max MAX_TOOL_CALLS tool executions per turn).
         tool_result = self._parse_tool_call(content)
         if tool_result:
-            if tool_calls >= 3:
-                return "抱歉，查询所需的工具调用次数过多。请缩小问题范围后重试。"
+            if tool_calls >= MAX_TOOL_CALLS + 1:
+                # The nudge turn was already given and the LLM still insists
+                # on calling tools — fail hard instead of looping forever.
+                return TOOL_LIMIT_HARD_MESSAGE
+            if tool_calls >= MAX_TOOL_CALLS:
+                # One extra LLM turn: answer with what we already have.
+                self.stm.add("tool", TOOL_LIMIT_NUDGE, tool_name="limit")
+                return self._call_llm(temperature, tool_calls + 1)
             tool_name, params = tool_result
             result = self._execute_tool(tool_name, params)
             self.stm.add("tool", result, tool_name=tool_name)
@@ -193,11 +211,12 @@ class AgentSession:
             else:
                 augmented_messages.append(msg)
 
-        # Stream from DeepSeek — buffer just enough to detect tool calls.
-        TOOL_DETECT_WINDOW = 200  # chars to inspect before deciding
+        # Stream from DeepSeek — buffer enough to detect tool calls.
+        TOOL_DETECT_WINDOW = 200  # chars of a normal answer before flushing
         buffered: list[str] = []
         is_tool_call = False
         yielded = False
+        flushed_tokens = 0  # how many buffered tokens have been shown
 
         for token in chat_completion_stream(
             self.api_key, self.base_url, augmented_messages,
@@ -205,24 +224,30 @@ class AgentSession:
         ):
             if not is_tool_call:
                 buffered.append(token)
-                if "ACTION:" in "".join(buffered):
+                text = "".join(buffered)
+                if "ACTION:" in text:
                     # Tool call detected — keep buffering silently.
                     is_tool_call = True
-                elif len("".join(buffered)) >= TOOL_DETECT_WINDOW:
-                    # Looks like a normal response — flush buffer progressively.
+                elif text.lstrip().startswith("THOUGHT"):
+                    # Tool-call round: the THOUGHT preamble can be very long,
+                    # so never flush early — wait for ACTION or stream end.
+                    continue
+                elif len(text) >= TOOL_DETECT_WINDOW:
+                    # Normal answer — flush buffer progressively.
                     if not yielded:
                         yielded = True
                         for t in buffered:
                             yield t
+                        flushed_tokens = len(buffered)
                     else:
                         yield token
+                        flushed_tokens = len(buffered)
             else:
                 buffered.append(token)
 
         if not yielded and not is_tool_call:
-            # Response shorter than detection window — just flush everything.
-            for t in buffered:
-                yield t
+            # Short answer or a THOUGHT-only round — flush once, cleaned.
+            yield self._clean_response("".join(buffered))
 
         content = "".join(buffered)
 
@@ -230,34 +255,58 @@ class AgentSession:
         if is_tool_call:
             tool_result = self._parse_tool_call(content)
             if tool_result:
-                if tool_calls >= 3:
-                    yield "抱歉，查询所需的工具调用次数过多。请缩小问题范围后重试。"
+                if tool_calls >= MAX_TOOL_CALLS + 1:
+                    # The nudge turn was already given and the LLM still
+                    # insists on calling tools — fail hard.
+                    yield TOOL_LIMIT_HARD_MESSAGE
+                    return
+                if tool_calls >= MAX_TOOL_CALLS:
+                    # One extra LLM turn: answer with what we already have.
+                    self.stm.add("tool", TOOL_LIMIT_NUDGE, tool_name="limit")
+                    yield from self._call_llm_stream(temperature, tool_calls + 1)
                     return
                 tool_name, params = tool_result
                 result = self._execute_tool(tool_name, params)
                 self.stm.add("tool", result, tool_name=tool_name)
                 yield from self._call_llm_stream(temperature, tool_calls + 1)
                 return
+            # "ACTION:"-looking text that is not a valid tool call — surface
+            # the unseen part instead of ending the turn with nothing.
+            if not yielded:
+                yield self._clean_response(content)
+            else:
+                tail = self._clean_response("".join(buffered[flushed_tokens:]))
+                if tail:
+                    yield tail
 
     def _clean_response(self, content: str) -> str:
-        """Remove internal THOUGHT: prefix if present and not followed by a tool call."""
+        """Strip internal format lines from a final (non-tool-call) response.
+
+        This method is only reached after tool-call parsing has already
+        failed, so THOUGHT / ACTION / PARAMS markers are junk the model
+        echoed rather than a real tool call — always safe to drop.
+        Lines starting with "ACTION" (e.g. "ACTIONTHOUGHT: ...") are also
+        dropped, covering glued/malformed format output.
+        """
         lines = content.split("\n")
-        # Pre-compute: are there ACTION lines?  If yes, keep everything for parsing.
-        has_action = any(l.strip().startswith("ACTION:") for l in lines)
-        if has_action:
-            return content
-        # No tool call — drop every THOUGHT: line.
-        cleaned = [l for l in lines if not l.strip().startswith("THOUGHT:")]
+        cleaned = [l for l in lines if not re.match(r"\s*(THOUGHT|ACTION|PARAMS)", l)]
         result = "\n".join(cleaned).strip()
         return result if result else content
 
     def _parse_tool_call(self, content: str):
-        """Parse THOUGHT / ACTION / PARAMS from LLM output."""
+        """Parse THOUGHT / ACTION / PARAMS from LLM output.
+
+        The ACTION name is validated against the registered tool whitelist
+        (_TOOL_PARAM_MAP), so ordinary prose containing "ACTION:" (e.g.
+        advice to the student) is not misread as a tool call.
+        """
         action_match = re.search(r"ACTION:\s*(\w+)", content)
-        params_match = re.search(r"PARAMS:\s*(\{.*?\})", content, re.DOTALL)
         if action_match:
             tool_name = action_match.group(1)
+            if tool_name not in self._TOOL_PARAM_MAP:
+                return None
             params = {}
+            params_match = re.search(r"PARAMS:\s*(\{.*?\})", content, re.DOTALL)
             if params_match:
                 try:
                     params = json.loads(params_match.group(1))

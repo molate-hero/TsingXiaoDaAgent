@@ -251,9 +251,9 @@ class Tools:
             },
             {
                 "name": "semantic_search",
-                "description": "【词嵌入语义搜索】用 AI 理解查询意图进行语义搜索（如搜索'计算机'也能找到'软件工程'、'人工智能'等）",
+                "description": "按含义（语义）搜索辅修专业：输入学生兴趣或目标的自然语言描述（如'想学编程'、'对金融感兴趣'），返回按相关度排序的最多5个辅修专业。与 search_minors 的区别：本工具按语义匹配，关键词搜索按字面匹配。用户描述兴趣但没提具体专业名时优先用本工具。",
                 "parameters": {
-                    "query": {"type": "string", "description": "搜索查询"}
+                    "query": {"type": "string", "description": "学生兴趣或目标的自然语言描述"}
                 }
             },
             {
