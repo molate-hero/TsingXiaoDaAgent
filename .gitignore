@@ -1,0 +1,140 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.whl
+
+# Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Temporary Files
+*.tmp
+*.temp
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage and Testing
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Type Checking
+.mypy_cache/
+.pytype/
+.pyre/
+
+# Build and Distribution
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Documentation
+docs/_build/
+openai.md
+
+# Local Configuration
+*.local
+*.local.*
+
+# Logs
+logs/
+*.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups
+*.bak
+*.backup
+*.orig
+
+# Secrets and Credentials
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+
+# Misc
+*.class
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
