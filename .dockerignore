@@ -1,0 +1,21 @@
+# 构建上下文排除项（保证镜像干净、不含密钥/无关文件）
+# 注意：minors/** 是运行期知识库，必须保留在镜像内
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.log
+.DS_Store
+
+# 密钥与本地配置绝不进镜像（LLM_API_KEY 等由启动时 -e 注入）
+.env
+.env.*
+!.env.example
+
+# 测试与文档（运行时不需要）
+tests/
+README.md
+openai.md
+本科辅修培养方案2026版.md
