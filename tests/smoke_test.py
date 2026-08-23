@@ -60,23 +60,23 @@ def make_sse(text: str, usage: dict | None = None) -> str:
 
 
 def mock_llm_handler(request: httpx.Request) -> httpx.Response:
-    """模拟上游模型：第一次调用让模型"思考并调用工具"，第二次收到 Observation 后给出 Final Answer。"""
+    """模拟上游模型：第一次调用让模型"思考并调用工具"，第二次收到 __Observation__ 后给出 __Final_Answer__。"""
     body = json.loads(request.content)
     obs_count = sum(
         1
         for m in body["messages"]
-        if m["role"] == "user" and str(m.get("content", "")).startswith("Observation")
+        if m["role"] == "user" and str(m.get("content", "")).startswith("__Observation__")
     )
     if obs_count == 0:
         text = (
-            "Thought: 学生询问计算机辅修的学分要求，需要先获取培养方案。\n"
-            "Action: get_minor_detail\n"
-            'Action Input: {"name": "计算机科学与技术"}'
+            "__Thought__: 学生询问计算机辅修的学分要求，需要先获取培养方案。\n"
+            "__Action__: get_minor_detail\n"
+            '__Action_Input__: {"name": "计算机科学与技术"}'
         )
     else:
         text = (
-            "Thought: 培养方案显示至少修完36学分（12门课程），必修28学分。\n"
-            "Final Answer: 计算机辅修需修满至少 **36 学分**（12 门课程），"
+            "__Thought__: 培养方案显示至少修完36学分（12门课程），必修28学分。\n"
+            "__Final_Answer__: 计算机辅修需修满至少 **36 学分**（12 门课程），"
             "其中必修 28 学分、限选不少于 2 学分、选修不少于 6 学分。"
         )
     return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, text=make_sse(text))
@@ -87,6 +87,32 @@ def _build_agent() -> ReActAgent:
     kb = KnowledgeBase(cfg.knowledge_dir).load()
     llm = LLMClient(cfg, transport=httpx.MockTransport(mock_llm_handler))
     return ReActAgent(llm, kb, cfg)
+
+
+def _agent_with(responses: list[str]) -> ReActAgent:
+    """构造一个按脚本依次返回 responses[i] 的上游 mock 的 agent。"""
+    calls = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        idx = min(calls["i"], len(responses) - 1)
+        calls["i"] += 1
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, text=make_sse(responses[idx])
+        )
+
+    cfg = get_config()
+    kb = KnowledgeBase(cfg.knowledge_dir).load()
+    return ReActAgent(LLMClient(cfg, transport=httpx.MockTransport(handler)), kb, cfg)
+
+
+async def _collect(agent: ReActAgent, message: str = "测试") -> tuple[str, str]:
+    trace, answer = [], []
+    async for ev in agent.run_stream([{"role": "user", "content": message}]):
+        if ev["type"] == "trace":
+            trace.append(ev["delta"])
+        elif ev["type"] == "answer":
+            answer.append(ev["delta"])
+    return "".join(trace), "".join(answer)
 
 
 def test_parse_react_step() -> None:
@@ -135,11 +161,63 @@ async def test_react_loop() -> None:
     done = next(ev for ev in events if ev["type"] == "done")
 
     assert "get_minor_detail" in trace, "思维链应包含工具调用"
-    assert "Observation" in trace, "思维链应包含工具观察结果"
+    assert "\n\n调用工具get_minor_detail中...\n\n" in trace, "工具调用前后应各留一个空行"
+    assert "参数：" not in trace and "【检索结果】" not in trace, "工具参数与检索结果不应展示"
     assert "36 学分" in answer, "最终回答应包含检索到的事实"
     assert done["usage"]["completion_tokens"] > 0, "usage 应被累计"
     assert answer == "".join(chunk_text(answer)), "chunk_text 应无损拼接"
+    # 回归：思考区不得出现任何标记（新式 __Xxx__ 与旧式 Xxx:），也不得混入回答正文
+    for marker in ("__Thought__", "__Action__", "__Action_Input__", "__Final_Answer__", "__Observation__"):
+        assert marker not in trace, f"思考区不应出现标记 {marker}"
+    for legacy in ("Thought:", "Final Answer:", "Action:", "Action Input", "Observation:"):
+        assert legacy not in trace, f"思考区不应出现旧式标签 {legacy}"
+    assert "计算机辅修需修满" not in trace, "回答正文不应被混入思考区"
+    assert "计算机辅修需修满" in answer, "回答正文应出现在最终回答中"
+    assert not answer.startswith(" "), "最终回答不应以空白开头"
     print(f"[OK] react loop：trace={len(trace)}字 / answer={len(answer)}字 / usage={done['usage']}")
+
+
+async def test_marker_routing() -> None:
+    """针对 __Thought__ 等标记方案的回归：多个标记全剥、无 Thought 直达 Final 不泄漏、
+    Thought+Observation 时正文不混入思考、无标记兜底不再重复。"""
+    # C1 多个 __Thought__ 全部剥离
+    t, a = await _collect(
+        _agent_with(["__Thought__: 第一次思考。\n__Thought__: 第二次思考。\n__Final_Answer__: 最终回答内容。"])
+    )
+    assert "__Thought__" not in t and "Thought:" not in t
+    assert "第一次思考。" in t and "第二次思考。" in t
+    assert "最终回答内容" in a and "最终回答内容" not in t
+
+    # C4 无 Thought 直接 __Final_Answer__：思考区为空，正文在回答区
+    t, a = await _collect(_agent_with(["__Final_Answer__: 直接回答内容。"]))
+    assert t == "" and a.strip() == "直接回答内容。"
+
+    # C3 Thought+Action(观察) 后再 Final：正文不进入思考区，标记全剥
+    t, a = await _collect(
+        _agent_with(
+            [
+                "__Thought__: 需要检索。\n__Action__: get_minor_detail\n"
+                '__Action_Input__: {"name":"计算机科学与技术"}',
+                "__Thought__: 查看完方案。\n__Final_Answer__: 计算机辅修需修满36学分。",
+            ]
+        )
+    )
+    for mk in ("__Thought__", "__Action__", "__Action_Input__", "__Final_Answer__", "__Observation__"):
+        assert mk not in t, f"思考区不应出现标记 {mk}"
+    assert "\n\n调用工具get_minor_detail中...\n\n" in t, "工具调用前后应各留一个空行"
+    assert "参数：" not in t and "【检索结果】" not in t, "工具参数与检索结果不应展示"
+    assert "计算机辅修需修满" not in t, "正文不应混入思考区"
+    assert "计算机辅修需修满" in a
+
+    # 无任何标记的容错：整段只作为最终回答，不重复进思考区
+    t, a = await _collect(_agent_with(["没有任何标记的普通回答。"]))
+    assert "没有任何标记的普通回答" in a and "没有任何标记的普通回答" not in t
+
+    # 全角冒号：模型可能输出 "__Final_Answer__：内容"（中文全角冒号）
+    t, a = await _collect(_agent_with(["__Final_Answer__：全角冒号回答。"]))
+    assert "全角冒号回答" in a, "全角冒号后的正文应保留"
+    assert not a.startswith("：") and not a.startswith(":"), "回答不应残留冒号"
+    print("[OK] marker routing（C1/C4/C3 + 无标记兜底 + 全角冒号）")
 
 
 def test_sse_endpoint() -> None:
@@ -263,6 +341,7 @@ if __name__ == "__main__":
     test_parse_react_step()
     test_knowledge()
     asyncio.run(test_react_loop())
+    asyncio.run(test_marker_routing())
     test_sse_endpoint()
     test_models_endpoint()
     test_no_auth_when_api_key_empty()
