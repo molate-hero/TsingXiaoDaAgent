@@ -124,6 +124,8 @@ def _clean_reasoning(text: str) -> str:
     # 合并可能因替换产生的多余连续空行
     t = re.sub(r"\n{3,}", "\n\n", t)
     t = t.strip()
+    # 去掉模型输出的前导标点怪癖（如孤立「。」），避免思维链开头出现残片
+    t = t.lstrip("。.，,、；;：:")
     # 工具调用后保留一个空行，与下一步思考分隔
     if tool:
         t = t.rstrip("\n") + "\n\n"

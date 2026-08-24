@@ -217,7 +217,25 @@ async def test_marker_routing() -> None:
     t, a = await _collect(_agent_with(["__Final_Answer__：全角冒号回答。"]))
     assert "全角冒号回答" in a, "全角冒号后的正文应保留"
     assert not a.startswith("：") and not a.startswith(":"), "回答不应残留冒号"
-    print("[OK] marker routing（C1/C4/C3 + 无标记兜底 + 全角冒号）")
+
+    # C5 用户实际遇到：最终轮输出以「。」开头 + __Thought__/__Final_Answer__ 标记
+    # 标记必须全剥、推理开头不得残留孤立「。」、正文不得混入思考区
+    t, a = await _collect(
+        _agent_with(
+            [
+                "__Thought__: 需要检索。\n__Action__: get_minor_detail\n"
+                '__Action_Input__: {"name":"人工智能"}',
+                "。__Thought__: 已收集到人工智能与计算机科学与技术两个辅修的培养方案细节。\n"
+                "__Final_Answer__: 同学你好！回答内容。",
+            ]
+        )
+    )
+    for mk in ("__Thought__", "__Action__", "__Action_Input__", "__Final_Answer__", "__Observation__"):
+        assert mk not in t, f"思考区不应出现标记 {mk}"
+    assert not t.startswith("。"), "推理开头不应残留孤立句号"
+    assert "已收集到人工智能与计算机科学与技术两个辅修的培养方案细节。" in t
+    assert "同学你好！" in a and "同学你好！" not in t, "正文只应出现在回答区"
+    print("[OK] marker routing（C1/C4/C3 + 无标记兜底 + 全角冒号 + C5「。」前缀）")
 
 
 async def test_fallback_round() -> None:
