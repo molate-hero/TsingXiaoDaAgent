@@ -17,10 +17,12 @@ from .llm import LLMClient
 from .prompts import build_system_prompt
 from .tools import Tool, build_tools
 
-# 行首锚定，避免误匹配 Action Input 值中的 "Action:" 字样
-_FINAL_RE = re.compile(r"(?m)^\s*Final\s+Answer\s*:\s*(.+)", re.S)
-_ACTION_RE = re.compile(r"(?m)^\s*Action\s*:\s*([^\n]+)")
-_ACTION_INPUT_RE = re.compile(r"(?m)^\s*Action\s+Input\s*:\s*(.+)", re.S)
+# 容错解析：标记允许与上一段文本同行（上游 flash 模型偶发不换行），前缀用 [^\n]*? 容忍；
+# 工具名只取英文标识符，避免误吞 "Action: get_minor_detail Action Input: {...}" 同行场景；
+# \b 词边界 + Action 后必须直接跟冒号（而非 Input），避免误匹配 Action Input 行
+_FINAL_RE = re.compile(r"(?m)^[^\n]*?\bFinal\s+Answer\s*:\s*(.+)", re.S)
+_ACTION_RE = re.compile(r"(?m)^[^\n]*?\bAction\s*:\s*([A-Za-z_][A-Za-z0-9_]*)")
+_ACTION_INPUT_RE = re.compile(r"(?m)^[^\n]*?\bAction\s+Input\s*:\s*(.+)", re.S)
 _THOUGHT_RE = re.compile(r"(?m)^\s*Thought\s*:\s*(.*?)(?=\n\s*(?:Action|Final\s+Answer)\s*:|\Z)", re.S)
 
 OBSERVATION_PREVIEW_CHARS = 240
@@ -32,7 +34,7 @@ def parse_react_step(text: str) -> dict:
     优先级：Final Answer > Action(+Action Input)；无任何标记时全部字段为空。
     """
     text = (text or "").strip()
-    result = {"thought": None, "action": None, "action_input": None, "final_answer": None}
+    result: dict[str, str | None] = {"thought": None, "action": None, "action_input": None, "final_answer": None}
     if not text:
         return result
 
@@ -121,6 +123,38 @@ class ReActAgent:
             if text:
                 final_text = text
             break
+
+        if not final_text and scratch:
+            # 收尾轮：步数耗尽但已检索到信息时，要求模型基于现有 Observation 直接作答，
+            # 避免开放多步任务（如「推荐适合我的辅修」）直接落入「抱歉」兜底
+            yield {"type": "trace", "delta": "\n\n（检索步数已耗尽，正在基于已检索信息整理最终回答…）\n\n"}
+            buffer: list[str] = []
+            try:
+                async for delta in self.llm.chat_stream(
+                    messages
+                    + scratch
+                    + [
+                        {
+                            "role": "user",
+                            "content": (
+                                "检索步数预算已耗尽。请立即停止检索，"
+                                "基于以上已经获得的 Observation 信息直接输出 Final Answer，不要再调用任何工具。"
+                            ),
+                        }
+                    ],
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
+                ):
+                    buffer.append(delta)
+                    yield {"type": "trace", "delta": delta}
+            finally:
+                self._accumulate_usage(usage)
+            text = "".join(buffer).strip()
+            parsed = parse_react_step(text)
+            if parsed["final_answer"]:
+                final_text = parsed["final_answer"]
+            elif not parsed["action"] and text:
+                final_text = text
 
         if not final_text:
             final_text = "抱歉，我在限定步数内未能完成检索与推理，请稍后再试，或换一种问法。"

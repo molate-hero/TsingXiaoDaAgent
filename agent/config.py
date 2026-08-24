@@ -31,7 +31,7 @@ DEFAULTS = {
     "LLM_INCLUDE_USAGE": "1",
     "LLM_TEMPERATURE": "0.3",
     "LLM_MAX_TOKENS": "2048",
-    "MAX_REACT_STEPS": "6",
+    "MAX_REACT_STEPS": "15",
     "TOOL_RESULT_MAX_CHARS": "6000",
     "KNOWLEDGE_DIR": "",
     "HOST": "0.0.0.0",
