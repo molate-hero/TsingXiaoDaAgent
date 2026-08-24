@@ -30,7 +30,9 @@ DEFAULTS = {
     "LLM_TIMEOUT": "60",
     "LLM_INCLUDE_USAGE": "1",
     "LLM_TEMPERATURE": "0.3",
-    "LLM_MAX_TOKENS": "2048",
+    # 上游为推理模型（reasoning_tokens 计入 completion 预算），需预留足够额度给内部推理，
+    # 否则最终回答会被 finish_reason=length 截断
+    "LLM_MAX_TOKENS": "8192",
     "MAX_REACT_STEPS": "15",
     "TOOL_RESULT_MAX_CHARS": "6000",
     "KNOWLEDGE_DIR": "",
