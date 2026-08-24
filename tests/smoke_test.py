@@ -217,7 +217,79 @@ async def test_marker_routing() -> None:
     t, a = await _collect(_agent_with(["__Final_Answer__：全角冒号回答。"]))
     assert "全角冒号回答" in a, "全角冒号后的正文应保留"
     assert not a.startswith("：") and not a.startswith(":"), "回答不应残留冒号"
-    print("[OK] marker routing（C1/C4/C3 + 无标记兜底 + 全角冒号）")
+
+    # C5 用户实际遇到：最终轮输出以「。」开头 + __Thought__/__Final_Answer__ 标记
+    # 标记必须全剥、推理开头不得残留孤立「。」、正文不得混入思考区
+    t, a = await _collect(
+        _agent_with(
+            [
+                "__Thought__: 需要检索。\n__Action__: get_minor_detail\n"
+                '__Action_Input__: {"name":"人工智能"}',
+                "。__Thought__: 已收集到人工智能与计算机科学与技术两个辅修的培养方案细节。\n"
+                "__Final_Answer__: 同学你好！回答内容。",
+            ]
+        )
+    )
+    for mk in ("__Thought__", "__Action__", "__Action_Input__", "__Final_Answer__", "__Observation__"):
+        assert mk not in t, f"思考区不应出现标记 {mk}"
+    assert not t.startswith("。"), "推理开头不应残留孤立句号"
+    assert "已收集到人工智能与计算机科学与技术两个辅修的培养方案细节。" in t
+    assert "同学你好！" in a and "同学你好！" not in t, "正文只应出现在回答区"
+    print("[OK] marker routing（C1/C4/C3 + 无标记兜底 + 全角冒号 + C5「。」前缀）")
+
+
+async def test_fallback_round() -> None:
+    """收尾轮回归：步数耗尽但已检索时进入「直接作答」轮，与主循环共用同一套边界路由——
+    推理经清洗后进 trace、回答以 answer 事件发出，不得泄漏标记、不得重复展示，用量应累计。"""
+    import os
+
+    old = os.environ.get("MAX_REACT_STEPS")
+    os.environ["MAX_REACT_STEPS"] = "1"  # 1 步主循环 + 1 步收尾轮
+    try:
+        # 正常路径：收尾轮给出 __Final_Answer__
+        agent = _agent_with(
+            [
+                "__Thought__: 需要检索。\n__Action__: get_minor_detail\n"
+                '__Action_Input__: {"name":"计算机科学与技术"}',
+                "__Thought__: 查看完方案，整理回答。\n"
+                "__Final_Answer__: 计算机辅修需修满至少 **36 学分**（12 门课程）。",
+            ]
+        )
+        events = [ev async for ev in agent.run_stream([{"role": "user", "content": "推荐适合我的辅修？"}])]
+        t = "".join(ev["delta"] for ev in events if ev["type"] == "trace")
+        a = "".join(ev["delta"] for ev in events if ev["type"] == "answer")
+        done = next(ev for ev in events if ev["type"] == "done")
+
+        assert "检索步数已耗尽" in t, "应提示进入收尾轮"
+        assert "\n\n调用工具get_minor_detail中...\n\n" in t, "工具调用应作为思考展示"
+        assert "查看完方案，整理回答。" in t, "收尾轮推理应清洗后展示"
+        for mk in ("__Thought__", "__Action__", "__Action_Input__", "__Final_Answer__", "__Observation__"):
+            assert mk not in t, f"思考区不应出现标记 {mk}"
+        for legacy in ("Thought:", "Final Answer:", "Action:", "Action Input", "Observation:"):
+            assert legacy not in t, f"思考区不应出现旧式标签 {legacy}"
+        assert "计算机辅修需修满" not in t, "回答正文不应混入思考区（无重复展示）"
+        assert "36 学分" in a, "收尾轮回答应进入 answer 事件"
+        assert not a.startswith((" ", "：", ":")), "回答不应以空白/冒号开头"
+        assert done["usage"]["completion_tokens"] == 160, "两次 LLM 调用的用量应被累计"
+
+        # 容错路径：收尾轮只输出 __Thought__（无 Final Answer 标记）→ 整段清洗后作为回答
+        t2, a2 = await _collect(
+            _agent_with(
+                [
+                    "__Thought__: 需要检索。\n__Action__: get_minor_detail\n"
+                    '__Action_Input__: {"name":"计算机科学与技术"}',
+                    "__Thought__: 基于已有信息，计算机辅修需要修满至少36学分。",
+                ]
+            )
+        )
+        assert "__Thought__" not in a2 and "Thought:" not in a2, "回答不应泄漏标记"
+        assert "基于已有信息，计算机辅修需要修满至少36学分。" in a2
+    finally:
+        if old is None:
+            os.environ.pop("MAX_REACT_STEPS", None)
+        else:
+            os.environ["MAX_REACT_STEPS"] = old
+    print("[OK] fallback round（收尾轮：无标记泄漏、无重复展示、用量累计）")
 
 
 def test_sse_endpoint() -> None:

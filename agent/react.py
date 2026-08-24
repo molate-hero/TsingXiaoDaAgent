@@ -124,6 +124,8 @@ def _clean_reasoning(text: str) -> str:
     # 合并可能因替换产生的多余连续空行
     t = re.sub(r"\n{3,}", "\n\n", t)
     t = t.strip()
+    # 去掉模型输出的前导标点怪癖（如孤立「。」），避免思维链开头出现残片
+    t = t.lstrip("。.，,、；;：:")
     # 工具调用后保留一个空行，与下一步思考分隔
     if tool:
         t = t.rstrip("\n") + "\n\n"
@@ -162,49 +164,13 @@ class ReActAgent:
         answer_streamed = False  # 回答是否已在流中作为 answer 发出（避免末尾重放）
 
         for _ in range(self.config.max_react_steps):
-            buffer: list[str] = []      # 本步完整原始输出（用于解析 & 回填 scratch）
-            reasoning: list[str] = []   # 边界前的推理原文（仅用于展示）
+            step_out: dict = {}
             in_answer = False
-            answer_chunk = ""           # 实时缓存 answer，凑满 ANSWER_CHUNK_SIZE 再发
-            answer_started = False      # 是否已出现首个非空白字符（用于裁剪回答开头的空白）
-
-            try:
-                async for delta in self.llm.chat_stream(
-                    messages + scratch,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                ):
-                    buffer.append(delta)
-                    if not in_answer:
-                        reasoning.append(delta)
-                        joined = "".join(reasoning)
-                        m = _FINAL_STREAM_RE.search(joined)
-                        if m:
-                            # 越过 __Final_Answer__ 边界：其前为推理，其后为回答正文
-                            for piece in chunk_text(_clean_reasoning(joined[: m.start()])):
-                                if piece:
-                                    yield {"type": "trace", "delta": piece}
-                            answer_chunk = joined[m.end():]
-                            in_answer = True
-                    else:
-                        answer_chunk += delta
-                    # 裁剪回答开头的空白/残留冒号（ASCII 或全角）：无论来自边界拆分还是后续 token
-                    if in_answer and not answer_started:
-                        answer_chunk = answer_chunk.lstrip(" \t\r\n\u3000：:")
-                        if answer_chunk:
-                            answer_started = True
-                    if in_answer:
-                        while len(answer_chunk) >= ANSWER_CHUNK_SIZE:
-                            yield {"type": "answer", "delta": answer_chunk[:ANSWER_CHUNK_SIZE]}
-                            answer_chunk = answer_chunk[ANSWER_CHUNK_SIZE:]
-            finally:
-                self._accumulate_usage(usage)
-
-            # 兜底：剩余的 answer 缓存
-            if answer_chunk:
-                yield {"type": "answer", "delta": answer_chunk}
-
-            text = "".join(buffer).strip()
+            async for ev in self._stream_step(messages + scratch, usage, step_out):
+                if ev["type"] == "answer":
+                    in_answer = True
+                yield ev
+            text = step_out["text"].strip()
             parsed = parse_react_step(text)
 
             if parsed["final_answer"]:
@@ -214,7 +180,7 @@ class ReActAgent:
 
             if parsed["action"]:
                 # 动作步骤：把本步推理清洗后作为思考展示（工具调用呈现为「调用工具<工具名>中...」）
-                for piece in chunk_text(_clean_reasoning("".join(reasoning))):
+                for piece in chunk_text(_clean_reasoning(step_out["reasoning"])):
                     if piece:
                         yield {"type": "trace", "delta": piece}
                 scratch.append({"role": "assistant", "content": text})
@@ -229,6 +195,39 @@ class ReActAgent:
                 final_text = _clean_reasoning(text)
             break
 
+        if not final_text and scratch:
+            # 收尾轮：步数耗尽但已检索到信息时，要求模型基于现有 Observation 直接作答，
+            # 避免开放多步任务（如「推荐适合我的辅修」）直接落入「抱歉」兜底。
+            # 与主循环共用 _stream_step 的边界路由：推理经 _clean_reasoning 清洗后进 trace，
+            # 回答以 answer 事件流式发出，末尾不再重放，避免与思考区重复展示。
+            yield {"type": "trace", "delta": "\n\n（检索步数已耗尽，正在基于已检索信息整理最终回答…）\n\n"}
+            step_out: dict = {}
+            fallback_streamed = False
+            async for ev in self._stream_step(
+                messages
+                + scratch
+                + [
+                    {
+                        "role": "user",
+                        "content": (
+                            "检索步数预算已耗尽。请立即停止检索，"
+                            "基于以上已经获得的 Observation 信息直接输出 Final Answer，不要再调用任何工具。"
+                        ),
+                    }
+                ],
+                usage,
+                step_out,
+            ):
+                if ev["type"] == "answer":
+                    fallback_streamed = True
+                yield ev
+            parsed = parse_react_step(step_out["text"])
+            if parsed["final_answer"]:
+                final_text = parsed["final_answer"]
+                answer_streamed = fallback_streamed
+            elif not parsed["action"] and step_out["text"]:
+                final_text = _clean_reasoning(step_out["text"])
+
         if not final_text:
             final_text = "抱歉，我在限定步数内未能完成检索与推理，请稍后再试，或换一种问法。"
 
@@ -236,6 +235,55 @@ class ReActAgent:
             for piece in chunk_text(final_text):
                 yield {"type": "answer", "delta": piece}
         yield {"type": "done", "usage": usage}
+
+    async def _stream_step(self, messages: list[dict], usage: dict, out: dict) -> AsyncIterator[dict]:
+        """流式执行一轮 LLM 调用：按「标记边界路由」产出 trace/answer 事件，并在 finally 累计用量。
+
+        调用方必须完整消费本生成器；结束后 out 中写入：
+        - text       本轮完整原始输出（供 parse_react_step 解析 / 回填 scratch）
+        - reasoning  边界前的推理原文（供 _clean_reasoning 清洗后展示）
+        """
+        buffer: list[str] = []      # 本步完整原始输出（用于解析 & 回填 scratch）
+        reasoning: list[str] = []   # 边界前的推理原文（仅用于展示）
+        in_answer = False
+        answer_chunk = ""           # 实时缓存 answer，凑满 ANSWER_CHUNK_SIZE 再发
+        answer_started = False      # 是否已出现首个非空白字符（用于裁剪回答开头的空白）
+        try:
+            async for delta in self.llm.chat_stream(
+                messages,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+            ):
+                buffer.append(delta)
+                if not in_answer:
+                    reasoning.append(delta)
+                    joined = "".join(reasoning)
+                    m = _FINAL_STREAM_RE.search(joined)
+                    if m:
+                        # 越过 __Final_Answer__ 边界：其前为推理，其后为回答正文
+                        for piece in chunk_text(_clean_reasoning(joined[: m.start()])):
+                            if piece:
+                                yield {"type": "trace", "delta": piece}
+                        answer_chunk = joined[m.end():]
+                        in_answer = True
+                else:
+                    answer_chunk += delta
+                # 裁剪回答开头的空白/残留冒号（ASCII 或全角）：无论来自边界拆分还是后续 token
+                if in_answer and not answer_started:
+                    answer_chunk = answer_chunk.lstrip(" \t\r\n　：:")
+                    if answer_chunk:
+                        answer_started = True
+                if in_answer:
+                    while len(answer_chunk) >= ANSWER_CHUNK_SIZE:
+                        yield {"type": "answer", "delta": answer_chunk[:ANSWER_CHUNK_SIZE]}
+                        answer_chunk = answer_chunk[ANSWER_CHUNK_SIZE:]
+        finally:
+            self._accumulate_usage(usage)
+        # 兜底：剩余的 answer 缓存
+        if answer_chunk:
+            yield {"type": "answer", "delta": answer_chunk}
+        out["text"] = "".join(buffer)
+        out["reasoning"] = "".join(reasoning)
 
     async def run(self, history: list[dict]) -> tuple[str, dict]:
         """非流式便捷方法：返回 (最终回答, usage)。"""
