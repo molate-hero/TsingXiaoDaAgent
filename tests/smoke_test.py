@@ -391,12 +391,44 @@ def test_no_auth_when_api_key_empty() -> None:
     print("[OK] API_KEY 为空时无需鉴权（单元 + 端到端）")
 
 
+async def test_course_index() -> None:
+    """课程库：加载、工具注册、检索/详情/按辅修方案列出。"""
+    import asyncio as _aio
+
+    from agent.courses import CourseIndex
+    from agent.tools import _get_course_detail, _list_courses_for_minor, _search_courses
+
+    cfg = get_config()
+    cidx = CourseIndex(cfg.courses_path).load()
+    assert len(cidx) >= 1000, f"课程库应包含大量课程，实际 {len(cidx)}"
+
+    # 工具注册
+    agent = _build_agent()
+    for t in ("search_courses", "get_course_detail", "list_courses_for_minor"):
+        assert t in agent.tools, f"应注册课程工具 {t}"
+
+    # 详情（按名称 / 课程号）
+    d_name = await _get_course_detail(cidx, "数据结构")
+    assert "数据结构" in d_name and "先修" in d_name
+    d_id = await _get_course_detail(cidx, "34100373")
+    assert "数据结构" in d_id
+
+    # 检索
+    s = await _search_courses(cidx, "机器学习")
+    assert "机器学习" in s
+
+    # 按辅修方案列出
+    lst = await _list_courses_for_minor(cidx, "计算机科学与技术专业辅修培养方案")
+    assert "计算机科学与技术专业辅修培养方案" in lst and "程序设计基础" in lst
+    print(f"[OK] 课程库：{len(cidx)} 门课程，7 个工具，检索/详情/按方案列出均正常")
+
+
 if __name__ == "__main__":
     test_parse_react_step()
     test_knowledge()
     asyncio.run(test_react_loop())
     asyncio.run(test_marker_routing())
-    asyncio.run(test_fallback_round())
+    asyncio.run(test_course_index())
     test_sse_endpoint()
     test_models_endpoint()
     test_no_auth_when_api_key_empty()

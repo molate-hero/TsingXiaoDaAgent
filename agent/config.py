@@ -36,6 +36,7 @@ DEFAULTS = {
     "MAX_REACT_STEPS": "15",
     "TOOL_RESULT_MAX_CHARS": "6000",
     "KNOWLEDGE_DIR": "",
+    "COURSES_FILE": "",
     "HOST": "0.0.0.0",
     "PORT": "8000",
 }
@@ -67,6 +68,7 @@ class Config:
     max_react_steps: int
     tool_result_max_chars: int
     knowledge_dir: Path
+    courses_path: Path
     host: str
     port: int
 
@@ -87,6 +89,10 @@ def get_config() -> Config:
     knowledge_dir = (
         Path(knowledge_dir_raw).resolve() if knowledge_dir_raw else PROJECT_ROOT / "minors"
     )
+    courses_raw = _get("COURSES_FILE")
+    courses_path = (
+        Path(courses_raw).resolve() if courses_raw else knowledge_dir / "curated_courses.json"
+    )
     return Config(
         api_key=_get("API_KEY"),
         llm_api_key=_get("LLM_API_KEY"),
@@ -100,6 +106,7 @@ def get_config() -> Config:
         max_react_steps=int(_get("MAX_REACT_STEPS")),
         tool_result_max_chars=int(_get("TOOL_RESULT_MAX_CHARS")),
         knowledge_dir=knowledge_dir,
+        courses_path=courses_path,
         host=_get("HOST"),
         port=int(_get("PORT")),
     )

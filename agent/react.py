@@ -13,6 +13,7 @@ import re
 from typing import AsyncIterator, Optional
 
 from .config import Config
+from .courses import CourseIndex
 from .knowledge import KnowledgeBase
 from .llm import LLMClient
 from .prompts import build_system_prompt
@@ -134,7 +135,10 @@ class ReActAgent:
         self.llm = llm
         self.knowledge = knowledge
         self.config = config
-        self.tools: dict[str, Tool] = build_tools(knowledge)
+        self.courses = CourseIndex(config.courses_path).load()
+        if len(self.knowledge.docs) == 0 and len(self.courses) == 0:
+            raise RuntimeError("知识库与课程库均为空，无法启动")
+        self.tools: dict[str, Tool] = build_tools(knowledge, self.courses)
 
     def system_prompt(self) -> str:
         return build_system_prompt(self.tools)
